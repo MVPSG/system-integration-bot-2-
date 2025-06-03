@@ -1,0 +1,99 @@
+"""Модуль для вывода информации о фишинговых сайтах с использованием API PhishStats."""
+
+from typing import List, Optional
+import requests
+from requests.exceptions import RequestException
+from telebot.types import Message
+from bot_func_abc import AtomicBotFunctionABC
+
+
+class PhishingInfoFunction(AtomicBotFunctionABC):
+    """Класс для обработки команд о фишинговых сайтах."""
+
+    commands = ["phishing"]
+    authors = ["mvp_sg"]
+    about = "Информация о фишинговых сайтах"
+    description = ("Команда /phishing показывает информацию о фишинговых сайтах\n"
+                  "Доступные подкоманды:\n"
+                  "/phishing latest [N] - последние N сайтов (по умолчанию 5)\n"
+                  "/phishing country [CODE] [N] - N сайтов по стране (по умолчанию 5)")
+    state = True
+
+    def __init__(self):
+        self.base_url = "http://api.phishstats.info/api/phishing"
+
+    def get_phishing_data(self, params: Optional[dict] = None) -> Optional[List[dict]]:
+        """Получение данных о фишинговых сайтах."""
+        try:
+            response = requests.get(self.base_url, params=params, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except RequestException as e:
+            print(f"Ошибка при запросе к API: {e}")
+            return None
+
+    def set_handlers(self, bot):
+        """Устанавливает обработчики команд для бота."""
+
+        @bot.message_handler(commands=self.commands)
+        def handle_phishing(message: Message):
+            """Обработчик команды /phishing."""
+            try:
+                args = message.text.strip().split()[1:]
+                
+                if not args:
+                    bot.send_message(message.chat.id, 
+                                   "❌ Неправильный формат команды. Используйте:\n"
+                                   "/phishing latest [N] - последние N сайтов\n"
+                                   "/phishing country [CODE] [N] - сайты по стране")
+                    return
+
+                subcommand = args[0].lower()
+                
+                if subcommand == "latest":
+                    count = int(args[1]) if len(args) > 1 and args[1].isdigit() else 5
+                    count = min(count, 20)  # Ограничение на количество
+                    
+                    data = self.get_phishing_data({'_sort': '-id', '_size': count})
+                    if not data:
+                        bot.send_message(message.chat.id, "😕 Не удалось получить данные")
+                        return
+                    
+                    response = "🔎 Последние фишинговые сайты:\n\n" + "\n\n".join(
+                        f"🔗 {item.get('url', 'N/A')}\n"
+                        f"🌍 Страна: {item.get('country', 'N/A')}\n"
+                        f"📅 Дата: {item.get('date', 'N/A')}"
+                        for item in data
+                    )
+
+                elif subcommand == "country":
+                    if len(args) < 2:
+                        bot.send_message(message.chat.id, "❌ Укажите код страны (например: RU, US)")
+                        return
+                        
+                    country = args[1].upper()
+                    count = int(args[2]) if len(args) > 2 and args[2].isdigit() else 5
+                    count = min(count, 20)
+                    
+                    data = self.get_phishing_data({'country': country, '_sort': '-id', '_size': count})
+                    if not data:
+                        bot.send_message(message.chat.id, f"😕 Нет данных для страны {country}")
+                        return
+                        
+                    response = f"🔎 Фишинговые сайты в {country}:\n\n" + "\n\n".join(
+                        f"🔗 {item.get('url', 'N/A')}\n"
+                        f"📅 Дата: {item.get('date', 'N/A')}"
+                        for item in data
+                    )
+
+                else:
+                    bot.send_message(message.chat.id, "❌ Неизвестная подкоманда")
+                    return
+
+                bot.send_message(message.chat.id, response[:4096])  # Ограничение Telegram
+
+            except ValueError:
+                bot.send_message(message.chat.id, "❌ Числовой параметр должен быть целым числом")
+            except Exception as e:
+                print(f"Ошибка в обработчике: {e}")
+                bot.send_message(message.chat.id, "⚠ Произошла ошибка при обработке запроса")
